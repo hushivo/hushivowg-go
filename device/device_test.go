@@ -150,13 +150,18 @@ func (pair *testPair) Send(tb testing.TB, ping SendDirection, done chan struct{}
 
 // genTestPair creates a testPair.
 func genTestPair(tb testing.TB, realSocket bool) (pair testPair) {
-	cfg, endpointCfg := genConfigs(tb)
 	var binds [2]conn.Bind
 	if realSocket {
 		binds[0], binds[1] = conn.NewDefaultBind(), conn.NewDefaultBind()
 	} else {
 		binds = bindtest.NewChannelBinds()
 	}
+	return genTestPairWithBinds(tb, binds)
+}
+
+func genTestPairWithBinds(tb testing.TB, binds [2]conn.Bind) (pair testPair) {
+	tb.Helper()
+	cfg, endpointCfg := genConfigs(tb)
 	// Bring up a ChannelTun for each config.
 	for i := range pair {
 		p := &pair[i]
@@ -190,6 +195,31 @@ func genTestPair(tb testing.TB, realSocket bool) (pair testPair) {
 		tb.Cleanup(p.dev.Close)
 	}
 	return
+}
+
+func testHushivoTwoDevicePing(t *testing.T, binds [2]conn.Bind) {
+	t.Helper()
+	for i, bind := range binds {
+		wrapped, err := conn.NewHushivoBind(bind, 1452)
+		if err != nil {
+			t.Fatal(err)
+		}
+		binds[i] = wrapped
+	}
+	pair := genTestPairWithBinds(t, binds)
+	if t.Failed() {
+		t.FailNow()
+	}
+	pair.Send(t, Ping, nil)
+	pair.Send(t, Pong, nil)
+}
+
+func TestHushivoTwoDevicePing(t *testing.T) {
+	testHushivoTwoDevicePing(t, bindtest.NewChannelBinds())
+}
+
+func TestHushivoTwoDevicePingUDP(t *testing.T) {
+	testHushivoTwoDevicePing(t, [2]conn.Bind{conn.NewDefaultBind(), conn.NewDefaultBind()})
 }
 
 func TestTwoDevicePing(t *testing.T) {

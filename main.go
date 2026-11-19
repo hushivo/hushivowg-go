@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
+	"golang.zx2c4.com/wireguard/internal/framing"
 	"golang.zx2c4.com/wireguard/ipc"
 	"golang.zx2c4.com/wireguard/tun"
 )
@@ -109,12 +110,30 @@ func main() {
 		return device.LogLevelError
 	}()
 
+	bind := conn.NewDefaultBind()
+	mtu := device.DefaultMTU
+	if configuredBudget := os.Getenv("HUSHIVOWG_UDP_BUDGET"); configuredBudget != "" {
+		budget, err := strconv.Atoi(configuredBudget)
+		const overhead = device.MessageTransportSize + framing.V1HeaderSize
+		const minimumBudget = 1280 + overhead
+		if err != nil || budget < minimumBudget || budget > framing.MaxPayload {
+			fmt.Fprintf(os.Stderr, "HUSHIVOWG_UDP_BUDGET must be between %d and %d\n", minimumBudget, framing.MaxPayload)
+			os.Exit(ExitSetupFailed)
+		}
+		bind, err = conn.NewHushivoBind(bind, budget)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(ExitSetupFailed)
+		}
+		mtu = min(mtu, budget-overhead)
+	}
+
 	// open TUN device (or use supplied fd)
 
 	tdev, err := func() (tun.Device, error) {
 		tunFdStr := os.Getenv(ENV_WG_TUN_FD)
 		if tunFdStr == "" {
-			return tun.CreateTUN(interfaceName, device.DefaultMTU)
+			return tun.CreateTUN(interfaceName, mtu)
 		}
 
 		// construct tun device from supplied fd
@@ -130,7 +149,7 @@ func main() {
 		}
 
 		file := os.NewFile(uintptr(fd), "")
-		return tun.CreateTUNFromFile(file, device.DefaultMTU)
+		return tun.CreateTUNFromFile(file, mtu)
 	}()
 
 	if err == nil {
@@ -222,7 +241,7 @@ func main() {
 		return
 	}
 
-	device := device.NewDevice(tdev, conn.NewDefaultBind(), logger)
+	device := device.NewDevice(tdev, bind, logger)
 
 	logger.Verbosef("Device started")
 
